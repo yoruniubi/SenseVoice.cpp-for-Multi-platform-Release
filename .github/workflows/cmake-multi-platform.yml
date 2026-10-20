@@ -78,13 +78,17 @@ jobs:
           export PATH="$PATH:/c/Program Files/Git/bin:/c/Program Files/Git/cmd"
           git submodule sync && git submodule update --init --recursive
           
-          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          # 用 SDL_MAIN_HANDLED 阻止 SDL 篡改 main 函数，并正常生成 Ninja 构建文件
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="-DSDL_MAIN_HANDLED" -DCMAKE_C_FLAGS="-DSDL_MAIN_HANDLED"
           
-          # 劫持构建文件，剔除 SDL2main
+          # 劫持构建文件，把 GUI 模式强制改为 Console 模式，并彻底剔除 SDL2main
+          sed -i 's/-mwindows/-Wl,--subsystem,console/g' build/build.ninja
+          sed -i 's/-Wl,--subsystem,windows/-Wl,--subsystem,console/g' build/build.ninja
           sed -i 's/-Wl,--undefined=WinMain//g' build/build.ninja
           sed -i 's/[^ ]*libSDL2main\.a//g' build/build.ninja
           sed -i 's/-lSDL2main//g' build/build.ninja
           
+          # 开始编译
           cmake --build build
           
       - name: Package
