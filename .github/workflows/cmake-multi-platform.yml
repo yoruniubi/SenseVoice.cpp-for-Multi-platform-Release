@@ -18,36 +18,40 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          # 加上 patchelf 用于修改 rpath
           sudo apt-get install -y build-essential cmake libsdl2-dev patchelf
       - name: Build
         run: |
           git submodule sync && git submodule update --init --recursive
+          # ⑤ 确认加上 -DGGML_NATIVE=OFF
           cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF -DBUILD_SHARED_LIBS=OFF
           cmake --build build -j $(nproc)
           
       - name: Smoke Test
         run: |
           cd build/bin
+          # ① 断言 stream 存在
           test -f sense-voice-stream || { echo "Error: stream missing!"; exit 1; }
           chmod +x sense-voice-stream sense-voice-main
           ./sense-voice-stream --help || true
           
-      - name: Package (Fix Dynamic Libs & RPATH)
+      - name: Package
         run: |
+          mkdir -p release_pkg
           cd build/bin
-          # 1. 剔除无用二进制
-          rm -f sense-voice-quantize sense-voice-zcr-main
           
-          # 2. 拷贝 Linux 下必需的底层动态库
-          cp /usr/lib/x86_64-linux-gnu/libSDL2-2.0.so.0 .
-          cp /usr/lib/x86_64-linux-gnu/libgomp.so.1 .
+          # ② 拷贝依赖库
+          cp /usr/lib/x86_64-linux-gnu/libSDL2-2.0.so.0 release_pkg/ || cp /usr/lib/x86_64-linux-gnu/libSDL2-2.0.so.0 .
+          cp /usr/lib/x86_64-linux-gnu/libgomp.so.1 release_pkg/ || cp /usr/lib/x86_64-linux-gnu/libgomp.so.1 .
           
-          # 3. 用 patchelf 设置 RPATH 为 $ORIGIN，让程序去当前目录找 .so
+          # ② patchelf 修改 rpath
           patchelf --set-rpath '$ORIGIN' sense-voice-stream
           patchelf --set-rpath '$ORIGIN' sense-voice-main
           
-          # 4. 打包
+          # ③ 白名单拷贝：只拿主程序和流式程序，以及刚才放的动态库
+          cp sense-voice-main sense-voice-stream *.so* release_pkg/
+          
+          # 打包
+          cd release_pkg
           tar -czvf ../../sensevoice-linux-x64.tar.gz *
           
       - name: Upload artifact
@@ -62,40 +66,43 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install dependencies
-        # 关键修复：必须安装 sdl2，否则 CMake 会跳过 stream
+        # ① 安装 sdl2
         run: brew install cmake sdl2
       - name: Build
         run: |
           git submodule sync && git submodule update --init --recursive
-          cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF
+          # ⑤ 确认加上 -DGGML_NATIVE=OFF
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF -DBUILD_SHARED_LIBS=OFF
           cmake --build build -j $(sysctl -n hw.ncpu)
           
       - name: Smoke Test
         run: |
           cd build/bin
-          # 断言：如果没有 stream，直接让 CI 失败
+          # ① 断言 stream 存在
           test -f sense-voice-stream || { echo "Error: stream missing!"; exit 1; }
           chmod +x sense-voice-stream sense-voice-main
           ./sense-voice-stream --help || true
           
-      - name: Package (Fix Dylib Paths & Cleanup)
+      - name: Package
         run: |
+          mkdir -p release_pkg
           cd build/bin
-          # 1. 剔除无用二进制
-          rm -f sense-voice-quantize sense-voice-zcr-main
           
-          # 2. 拷贝 SDL2 dylib
-          SDL2_PATH=$(brew --prefix sdl2)/lib/libSDL2-2.0.0.dylib
-          cp $SDL2_PATH .
+          # ④ 获取 SDL2 路径并拷贝
+          SDL2_LIB=$(brew --prefix sdl2)/lib/libSDL2-2.0.0.dylib
+          cp $SDL2_LIB release_pkg/
           
-          # 3. 修改 dylib 的加载路径为当前目录 (@executable_path)
-          install_name_tool -id @executable_path/libSDL2-2.0.0.dylib libSDL2-2.0.0.dylib
-          install_name_tool -change $SDL2_PATH @executable_path/libSDL2-2.0.0.dylib sense-voice-stream
-          # 如果 main 也链接了 SDL2，也一并修改
-          install_name_tool -change $SDL2_PATH @executable_path/libSDL2-2.0.0.dylib sense-voice-main || true
+          # ④ 修改动态库加载路径 (install_name_tool)
+          install_name_tool -id @executable_path/libSDL2-2.0.0.dylib release_pkg/libSDL2-2.0.0.dylib
+          install_name_tool -change $SDL2_LIB @executable_path/libSDL2-2.0.0.dylib sense-voice-stream
+          install_name_tool -change $SDL2_LIB @executable_path/libSDL2-2.0.0.dylib sense-voice-main || true
           
-          # 4. 打包 (过滤掉构建残留文件)
-          zip -r ../../sensevoice-macos-arm64.zip sense-voice-* *.dylib
+          # ③ 白名单拷贝
+          cp sense-voice-main sense-voice-stream release_pkg/
+          
+          # 打包
+          cd release_pkg
+          zip -r ../../sensevoice-macos-arm64.zip *
           
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -125,7 +132,8 @@ jobs:
           export PATH="$PATH:/c/Program Files/Git/bin:/c/Program Files/Git/cmd"
           git submodule sync && git submodule update --init --recursive
           
-          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DCMAKE_CXX_FLAGS="-DSDL_MAIN_HANDLED" -DCMAKE_C_FLAGS="-DSDL_MAIN_HANDLED"
+          # ⑤ 确认加上 -DGGML_NATIVE=OFF 防止非法指令崩溃
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF -DBUILD_SHARED_LIBS=OFF -DCMAKE_CXX_FLAGS="-DSDL_MAIN_HANDLED" -DCMAKE_C_FLAGS="-DSDL_MAIN_HANDLED"
           
           sed -i 's/-mwindows/-Wl,--subsystem,console/g' build/build.ninja
           sed -i 's/-Wl,--subsystem,windows/-Wl,--subsystem,console/g' build/build.ninja
@@ -138,18 +146,20 @@ jobs:
       - name: Package
         shell: msys2 {0}
         run: |
-          # 1. 剔除无用二进制
-          rm -f build/bin/sense-voice-quantize.exe
-          rm -f build/bin/sense-voice-zcr-main.exe
+          mkdir -p release_pkg
           
-          # 2. 精准提取运行库
-          cp /clang64/bin/libc++.dll build/bin/
-          cp /clang64/bin/libunwind.dll build/bin/
-          cp /clang64/bin/libwinpthread-1.dll build/bin/
-          cp /clang64/bin/libomp.dll build/bin/
-          cp /clang64/bin/SDL2.dll build/bin/
+          # ③ 白名单拷贝：只拿主程序、流式程序
+          cp build/bin/sense-voice-main.exe release_pkg/
+          cp build/bin/sense-voice-stream.exe release_pkg/
           
-          cd build/bin
+          # 提取必需运行库
+          cp /clang64/bin/libc++.dll release_pkg/
+          cp /clang64/bin/libunwind.dll release_pkg/
+          cp /clang64/bin/libwinpthread-1.dll release_pkg/
+          cp /clang64/bin/libomp.dll release_pkg/
+          cp /clang64/bin/SDL2.dll release_pkg/
+          
+          cd release_pkg
           zip -r ../../sensevoice-windows-x64.zip *
           
       - name: Upload artifact
