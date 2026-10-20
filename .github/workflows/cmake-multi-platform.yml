@@ -22,7 +22,8 @@ jobs:
       - name: Build
         run: |
           git submodule sync && git submodule update --init --recursive
-          cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF
+          # 加上 -DBUILD_SHARED_LIBS=OFF 强制静态链接
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF -DBUILD_SHARED_LIBS=OFF
           cmake --build build -j $(nproc)
       - name: Package
         run: |
@@ -44,7 +45,8 @@ jobs:
       - name: Build
         run: |
           git submodule sync && git submodule update --init --recursive
-          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          # 加上 -DBUILD_SHARED_LIBS=OFF 强制静态链接
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF
           cmake --build build -j $(sysctl -n hw.ncpu)
       - name: Package
         run: |
@@ -78,22 +80,22 @@ jobs:
           export PATH="$PATH:/c/Program Files/Git/bin:/c/Program Files/Git/cmd"
           git submodule sync && git submodule update --init --recursive
           
-          # 用 SDL_MAIN_HANDLED 阻止 SDL 篡改 main 函数，并正常生成 Ninja 构建文件
-          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="-DSDL_MAIN_HANDLED" -DCMAKE_C_FLAGS="-DSDL_MAIN_HANDLED"
+          # 加上 -DBUILD_SHARED_LIBS=OFF 和 -DSDL_MAIN_HANDLED
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DCMAKE_CXX_FLAGS="-DSDL_MAIN_HANDLED" -DCMAKE_C_FLAGS="-DSDL_MAIN_HANDLED"
           
-          # 劫持构建文件，把 GUI 模式强制改为 Console 模式，并彻底剔除 SDL2main
+          # 修改 Ninja 文件，剔除 SDL2main 和 GUI 标志
           sed -i 's/-mwindows/-Wl,--subsystem,console/g' build/build.ninja
           sed -i 's/-Wl,--subsystem,windows/-Wl,--subsystem,console/g' build/build.ninja
           sed -i 's/-Wl,--undefined=WinMain//g' build/build.ninja
           sed -i 's/[^ ]*libSDL2main\.a//g' build/build.ninja
           sed -i 's/-lSDL2main//g' build/build.ninja
           
-          # 开始编译
           cmake --build build
           
       - name: Package
         shell: msys2 {0}
         run: |
+          # 只需要复制 SDL2.dll，ggml 已经是静态编译进去了
           cp /clang64/bin/SDL2.dll build/bin/
           cd build/bin
           zip -r ../../sensevoice-windows-x64.zip *
