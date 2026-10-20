@@ -3,10 +3,9 @@ name: Multi-platform Release
 on:
   push:
     tags:
-      - 'v*'          # 只有当推送 v 开头的 tag 时才会触发发布
-  workflow_dispatch:   # 允许在网页手动点击运行
+      - 'v*'
+  workflow_dispatch:
 
-# 必须给 write 权限，否则无法创建 Release
 permissions:
   contents: write
 
@@ -78,7 +77,10 @@ jobs:
         run: |
           export PATH="$PATH:/c/Program Files/Git/bin:/c/Program Files/Git/cmd"
           git submodule sync && git submodule update --init --recursive
-          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          
+          # 加上了 -DCMAKE_EXE_LINKER_FLAGS 解决 SDL_main 报错
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXE_LINKER_FLAGS="-Wl,--defsym=SDL_main=main"
+          
           cmake --build build
           
       - name: Package
