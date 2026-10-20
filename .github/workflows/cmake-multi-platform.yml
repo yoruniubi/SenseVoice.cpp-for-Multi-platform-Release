@@ -72,25 +72,28 @@ jobs:
             mingw-w64-clang-x86_64-cmake
             mingw-w64-clang-x86_64-SDL2
             zip
-      - name: Patch CMakeLists to remove SDL2main
-        shell: msys2 {0}
-        run: |
-          # 找到所有包含 SDL2main 的 CMakeLists.txt 并将其替换为空
-          grep -rl "SDL2main" . --include="CMakeLists.txt" | xargs sed -i 's/SDL2::SDL2main//g'
-          grep -rl "SDL2main" . --include="CMakeLists.txt" | xargs sed -i 's/SDL2main//g'
       - name: Build
         shell: msys2 {0}
         run: |
           export PATH="$PATH:/c/Program Files/Git/bin:/c/Program Files/Git/cmd"
           git submodule sync && git submodule update --init --recursive
+          
           cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          
+          # 劫持构建文件，剔除 SDL2main
+          sed -i 's/-Wl,--undefined=WinMain//g' build/build.ninja
+          sed -i 's/[^ ]*libSDL2main\.a//g' build/build.ninja
+          sed -i 's/-lSDL2main//g' build/build.ninja
+          
           cmake --build build
+          
       - name: Package
         shell: msys2 {0}
         run: |
           cp /clang64/bin/SDL2.dll build/bin/
           cd build/bin
           zip -r ../../sensevoice-windows-x64.zip *
+          
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
