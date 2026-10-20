@@ -3,7 +3,7 @@ name: Multi-platform Release
 on:
   push:
     tags:
-      - 'v*'          # 只有推送 v 开头的 tag 时才会触发发布
+      - 'v*'          # 只有当推送 v 开头的 tag 时才会触发发布
   workflow_dispatch:   # 允许在网页手动点击运行
 
 permissions:
@@ -22,7 +22,8 @@ jobs:
       - name: Build
         run: |
           git submodule sync && git submodule update --init --recursive
-          cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF
+          # 加上 -DBUILD_SHARED_LIBS=OFF 静态编译项目的库
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF -DBUILD_SHARED_LIBS=OFF
           cmake --build build -j $(nproc)
       - name: Smoke Test
         run: |
@@ -49,7 +50,8 @@ jobs:
       - name: Build
         run: |
           git submodule sync && git submodule update --init --recursive
-          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          # 加上 -DBUILD_SHARED_LIBS=OFF 静态编译项目的库
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF
           cmake --build build -j $(sysctl -n hw.ncpu)
       - name: Smoke Test
         run: |
@@ -88,24 +90,29 @@ jobs:
           export PATH="$PATH:/c/Program Files/Git/bin:/c/Program Files/Git/cmd"
           git submodule sync && git submodule update --init --recursive
           
-          # 用 SDL_MAIN_HANDLED 阻止 SDL 篡改 main 函数
-          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="-DSDL_MAIN_HANDLED" -DCMAKE_C_FLAGS="-DSDL_MAIN_HANDLED"
+          # 1. 静态编译项目库，并用 SDL_MAIN_HANDLED 阻止 SDL 篡改 main 函数
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DCMAKE_CXX_FLAGS="-DSDL_MAIN_HANDLED" -DCMAKE_C_FLAGS="-DSDL_MAIN_HANDLED"
           
-          # 劫持 Ninja 构建文件，强制 Console 模式，并彻底剔除 SDL2main
+          # 2. 劫持 Ninja 构建文件，剔除 SDL2main，强制 Console 模式
           sed -i 's/-mwindows/-Wl,--subsystem,console/g' build/build.ninja
           sed -i 's/-Wl,--subsystem,windows/-Wl,--subsystem,console/g' build/build.ninja
           sed -i 's/-Wl,--undefined=WinMain//g' build/build.ninja
           sed -i 's/[^ ]*libSDL2main\.a//g' build/build.ninja
           sed -i 's/-lSDL2main//g' build/build.ninja
           
-          # 开始编译
+          # 3. 开始编译
           cmake --build build
           
       - name: Package
         shell: msys2 {0}
         run: |
-          # 一锅端：把 MSYS2 clang64/bin 下所有的 dll 全部复制到输出目录，保证不缺任何运行库
-          cp /clang64/bin/*.dll build/bin/
+          # 4. 精准提取 Windows 下必需的 C++ 运行库和 SDL2，避免打包出 100MB 的垃圾
+          cp /clang64/bin/libc++.dll build/bin/
+          cp /clang64/bin/libunwind.dll build/bin/
+          cp /clang64/bin/libwinpthread-1.dll build/bin/
+          cp /clang64/bin/libomp.dll build/bin/
+          cp /clang64/bin/SDL2.dll build/bin/
+          
           cd build/bin
           zip -r ../../sensevoice-windows-x64.zip *
           
