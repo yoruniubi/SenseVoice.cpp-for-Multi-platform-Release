@@ -1,93 +1,97 @@
-name: Build and Release
+name: Multi-platform Release
 
 on:
   push:
     tags:
-      - 'v*'          # 推送 v 开头的 tag 时触发构建+发布
-  pull_request:
-  workflow_dispatch:   # 支持手动触发
+      - 'v*'
+  workflow_dispatch:
 
 permissions:
-  contents: write      # 允许创建 Release 并上传资产
+  contents: write
 
 jobs:
-  # ──────────────────────────────────────────────
-  # Linux x86_64
-  # ──────────────────────────────────────────────
   build-linux:
     runs-on: ubuntu-22.04
     steps:
-      - name: Clone
-        uses: actions/checkout@v4
-
+      - uses: actions/checkout@v4
       - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential cmake libsdl2-dev
-
       - name: Build
         run: |
           git submodule sync && git submodule update --init --recursive
           cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF
           cmake --build build -j $(nproc)
-
-      - name: Upload Linux artifact
+      - name: Package
+        run: |
+          cd build/bin
+          tar -czvf ../../sensevoice-linux-amd64.tar.gz *
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: sensevoice-linux-amd64
-          path: build/bin/
+          path: sensevoice-linux-amd64.tar.gz
 
-  # ──────────────────────────────────────────────
-  # macOS (Apple Silicon / Intel)
-  # ──────────────────────────────────────────────
   build-macos:
     runs-on: macos-latest
     steps:
-      - name: Clone
-        uses: actions/checkout@v4
-
+      - uses: actions/checkout@v4
       - name: Install dependencies
         run: brew install cmake
-
       - name: Build
         run: |
           git submodule sync && git submodule update --init --recursive
           cmake -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build -j $(sysctl -n hw.ncpu)
-
-      - name: Upload macOS artifact
+      - name: Package
+        run: |
+          cd build/bin
+          zip -r ../../sensevoice-macos.zip *
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: sensevoice-macos
-          path: build/bin/
+          path: sensevoice-macos.zip
 
-  # ──────────────────────────────────────────────
-  # Windows x64
-  # ──────────────────────────────────────────────
   build-windows:
     runs-on: windows-latest
     steps:
-      - name: Clone
-        uses: actions/checkout@v4
-
-      - name: Add msbuild to PATH
-        uses: microsoft/setup-msbuild@v2
-
+      - uses: actions/checkout@v4
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          update: true
+          msystem: CLANG64
+          install: >-
+            base-devel
+            mingw-w64-clang-x86_64-toolchain
+            mingw-w64-clang-x86_64-cmake
+            mingw-w64-clang-x86_64-SDL2    # 确保 CI 环境中安装 SDL2
       - name: Build
+        shell: msys2 {0}
         run: |
+          export PATH="$PATH:/c/Program Files/Git/bin:/c/Program Files/Git/cmd"
           git submodule sync && git submodule update --init --recursive
-          cmake -S . -B build -A x64 -DCMAKE_BUILD_TYPE=Release
-          cmake --build build --config Release -j $env:NUMBER_OF_PROCESSORS
-
-      - name: Upload Windows artifact
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build
+          
+      - name: Package
+        shell: msys2 {0}
+        run: |
+          # 将 SDL2.dll 复制到输出目录，保证流式程序能正常运行
+          cp /clang64/bin/SDL2.dll build/bin/
+          
+          # 进入输出目录并打包所有文件（exe + dll）
+          cd build/bin
+          zip -r ../../sensevoice-windows-x64.zip *
+          
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: sensevoice-windows-x64
-          path: build/bin/Release/
+          path: sensevoice-windows-x64.zip
 
-  # ──────────────────────────────────────────────
-  # Release：仅在推送 v* tag 时执行
-  # ──────────────────────────────────────────────
   release:
     runs-on: ubuntu-latest
     needs: [build-linux, build-macos, build-windows]
@@ -96,17 +100,12 @@ jobs:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          path: artifacts          # 所有 artifact 按名称下载到子目录
-
-      - name: List artifacts (debug)
-        run: find artifacts -type f
-
+          path: artifacts
       - name: Create Release and Upload Assets
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            artifacts/sensevoice-linux-amd64/**/*
-            artifacts/sensevoice-macos/**/*
-            artifacts/sensevoice-windows-x64/**/*
+            artifacts/**/*.zip
+            artifacts/**/*.tar.gz
           draft: false
           prerelease: false
