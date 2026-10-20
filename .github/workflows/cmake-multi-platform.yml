@@ -3,13 +3,15 @@ name: Multi-platform Release
 on:
   push:
     tags:
-      - 'v*'
-  workflow_dispatch:
+      - 'v*'          # 只有当推送 v 开头的 tag 时才会触发发布
+  workflow_dispatch:   # 允许在网页手动点击运行
 
+# 必须给 write 权限，否则无法创建 Release
 permissions:
   contents: write
 
 jobs:
+  # ================= Linux 构建 =================
   build-linux:
     runs-on: ubuntu-22.04
     steps:
@@ -33,6 +35,7 @@ jobs:
           name: sensevoice-linux-amd64
           path: sensevoice-linux-amd64.tar.gz
 
+  # ================= macOS 构建 =================
   build-macos:
     runs-on: macos-latest
     steps:
@@ -54,6 +57,7 @@ jobs:
           name: sensevoice-macos
           path: sensevoice-macos.zip
 
+  # ================= Windows 构建 =================
   build-windows:
     runs-on: windows-latest
     steps:
@@ -67,7 +71,8 @@ jobs:
             base-devel
             mingw-w64-clang-x86_64-toolchain
             mingw-w64-clang-x86_64-cmake
-            mingw-w64-clang-x86_64-SDL2    # 确保 CI 环境中安装 SDL2
+            mingw-w64-clang-x86_64-SDL2
+            zip
       - name: Build
         shell: msys2 {0}
         run: |
@@ -79,10 +84,7 @@ jobs:
       - name: Package
         shell: msys2 {0}
         run: |
-          # 将 SDL2.dll 复制到输出目录，保证流式程序能正常运行
           cp /clang64/bin/SDL2.dll build/bin/
-          
-          # 进入输出目录并打包所有文件（exe + dll）
           cd build/bin
           zip -r ../../sensevoice-windows-x64.zip *
           
@@ -92,6 +94,7 @@ jobs:
           name: sensevoice-windows-x64
           path: sensevoice-windows-x64.zip
 
+  # ================= 发布 Release =================
   release:
     runs-on: ubuntu-latest
     needs: [build-linux, build-macos, build-windows]
@@ -101,6 +104,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+          
       - name: Create Release and Upload Assets
         uses: softprops/action-gh-release@v2
         with:
