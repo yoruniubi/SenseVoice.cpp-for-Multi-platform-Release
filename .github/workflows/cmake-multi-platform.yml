@@ -22,37 +22,32 @@ jobs:
       - name: Build
         run: |
           git submodule sync && git submodule update --init --recursive
-          # ⑤ 确认加上 -DGGML_NATIVE=OFF
           cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF -DBUILD_SHARED_LIBS=OFF
           cmake --build build -j $(nproc)
           
       - name: Smoke Test
         run: |
           cd build/bin
-          # ① 断言 stream 存在
           test -f sense-voice-stream || { echo "Error: stream missing!"; exit 1; }
           chmod +x sense-voice-stream sense-voice-main
           ./sense-voice-stream --help || true
           
       - name: Package
         run: |
-          mkdir -p release_pkg
-          cd build/bin
+          export WORKSPACE=${{ github.workspace }}
+          mkdir -p $WORKSPACE/release_pkg
           
-          # ② 拷贝依赖库
-          cp /usr/lib/x86_64-linux-gnu/libSDL2-2.0.so.0 release_pkg/ || cp /usr/lib/x86_64-linux-gnu/libSDL2-2.0.so.0 .
-          cp /usr/lib/x86_64-linux-gnu/libgomp.so.1 release_pkg/ || cp /usr/lib/x86_64-linux-gnu/libgomp.so.1 .
-          
-          # ② patchelf 修改 rpath
+          cd $WORKSPACE/build/bin
           patchelf --set-rpath '$ORIGIN' sense-voice-stream
           patchelf --set-rpath '$ORIGIN' sense-voice-main
           
-          # ③ 白名单拷贝：只拿主程序和流式程序，以及刚才放的动态库
-          cp sense-voice-main sense-voice-stream *.so* release_pkg/
+          # 使用绝对路径拷贝，彻底避免路径错误
+          cp sense-voice-main sense-voice-stream $WORKSPACE/release_pkg/
+          cp /usr/lib/x86_64-linux-gnu/libSDL2-2.0.so.0 $WORKSPACE/release_pkg/
+          cp /usr/lib/x86_64-linux-gnu/libgomp.so.1 $WORKSPACE/release_pkg/
           
-          # 打包
-          cd release_pkg
-          tar -czvf ../../sensevoice-linux-x64.tar.gz *
+          cd $WORKSPACE/release_pkg
+          tar -czvf $WORKSPACE/sensevoice-linux-x64.tar.gz *
           
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -66,43 +61,37 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install dependencies
-        # ① 安装 sdl2
         run: brew install cmake sdl2
       - name: Build
         run: |
           git submodule sync && git submodule update --init --recursive
-          # ⑤ 确认加上 -DGGML_NATIVE=OFF
           cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF -DBUILD_SHARED_LIBS=OFF
           cmake --build build -j $(sysctl -n hw.ncpu)
           
       - name: Smoke Test
         run: |
           cd build/bin
-          # ① 断言 stream 存在
           test -f sense-voice-stream || { echo "Error: stream missing!"; exit 1; }
           chmod +x sense-voice-stream sense-voice-main
           ./sense-voice-stream --help || true
           
       - name: Package
         run: |
-          mkdir -p release_pkg
-          cd build/bin
-          
-          # ④ 获取 SDL2 路径并拷贝
+          export WORKSPACE=${{ github.workspace }}
+          mkdir -p $WORKSPACE/release_pkg
           SDL2_LIB=$(brew --prefix sdl2)/lib/libSDL2-2.0.0.dylib
-          cp $SDL2_LIB release_pkg/
           
-          # ④ 修改动态库加载路径 (install_name_tool)
-          install_name_tool -id @executable_path/libSDL2-2.0.0.dylib release_pkg/libSDL2-2.0.0.dylib
+          cd $WORKSPACE/build/bin
           install_name_tool -change $SDL2_LIB @executable_path/libSDL2-2.0.0.dylib sense-voice-stream
           install_name_tool -change $SDL2_LIB @executable_path/libSDL2-2.0.0.dylib sense-voice-main || true
           
-          # ③ 白名单拷贝
-          cp sense-voice-main sense-voice-stream release_pkg/
+          # 使用绝对路径拷贝
+          cp sense-voice-main sense-voice-stream $WORKSPACE/release_pkg/
+          cp $SDL2_LIB $WORKSPACE/release_pkg/
           
-          # 打包
-          cd release_pkg
-          zip -r ../../sensevoice-macos-arm64.zip *
+          cd $WORKSPACE/release_pkg
+          install_name_tool -id @executable_path/libSDL2-2.0.0.dylib libSDL2-2.0.0.dylib
+          zip -r $WORKSPACE/sensevoice-macos-arm64.zip *
           
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -132,7 +121,6 @@ jobs:
           export PATH="$PATH:/c/Program Files/Git/bin:/c/Program Files/Git/cmd"
           git submodule sync && git submodule update --init --recursive
           
-          # ⑤ 确认加上 -DGGML_NATIVE=OFF 防止非法指令崩溃
           cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF -DBUILD_SHARED_LIBS=OFF -DCMAKE_CXX_FLAGS="-DSDL_MAIN_HANDLED" -DCMAKE_C_FLAGS="-DSDL_MAIN_HANDLED"
           
           sed -i 's/-mwindows/-Wl,--subsystem,console/g' build/build.ninja
@@ -146,21 +134,21 @@ jobs:
       - name: Package
         shell: msys2 {0}
         run: |
-          mkdir -p release_pkg
+          export WORKSPACE=$(cygpath -u "${{ github.workspace }}")
+          mkdir -p $WORKSPACE/release_pkg
           
-          # ③ 白名单拷贝：只拿主程序、流式程序
-          cp build/bin/sense-voice-main.exe release_pkg/
-          cp build/bin/sense-voice-stream.exe release_pkg/
+          # 使用绝对路径拷贝
+          cp $WORKSPACE/build/bin/sense-voice-main.exe $WORKSPACE/release_pkg/
+          cp $WORKSPACE/build/bin/sense-voice-stream.exe $WORKSPACE/release_pkg/
           
-          # 提取必需运行库
-          cp /clang64/bin/libc++.dll release_pkg/
-          cp /clang64/bin/libunwind.dll release_pkg/
-          cp /clang64/bin/libwinpthread-1.dll release_pkg/
-          cp /clang64/bin/libomp.dll release_pkg/
-          cp /clang64/bin/SDL2.dll release_pkg/
+          cp /clang64/bin/libc++.dll $WORKSPACE/release_pkg/
+          cp /clang64/bin/libunwind.dll $WORKSPACE/release_pkg/
+          cp /clang64/bin/libwinpthread-1.dll $WORKSPACE/release_pkg/
+          cp /clang64/bin/libomp.dll $WORKSPACE/release_pkg/
+          cp /clang64/bin/SDL2.dll $WORKSPACE/release_pkg/
           
-          cd release_pkg
-          zip -r ../../sensevoice-windows-x64.zip *
+          cd $WORKSPACE/release_pkg
+          zip -r $WORKSPACE/sensevoice-windows-x64.zip *
           
       - name: Upload artifact
         uses: actions/upload-artifact@v4
