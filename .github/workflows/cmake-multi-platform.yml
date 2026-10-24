@@ -41,7 +41,6 @@ jobs:
           patchelf --set-rpath '$ORIGIN' sense-voice-stream
           patchelf --set-rpath '$ORIGIN' sense-voice-main
           
-          # 使用绝对路径拷贝，彻底避免路径错误
           cp sense-voice-main sense-voice-stream $WORKSPACE/release_pkg/
           cp /usr/lib/x86_64-linux-gnu/libSDL2-2.0.so.0 $WORKSPACE/release_pkg/
           cp /usr/lib/x86_64-linux-gnu/libgomp.so.1 $WORKSPACE/release_pkg/
@@ -55,8 +54,8 @@ jobs:
           name: sensevoice-linux-x64
           path: sensevoice-linux-x64.tar.gz
 
-  # ================= macOS 构建 (ARM64) =================
-  build-macos:
+  # ================= macOS 构建 (ARM64 / Apple Silicon) =================
+  build-macos-arm64:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -85,7 +84,6 @@ jobs:
           install_name_tool -change $SDL2_LIB @executable_path/libSDL2-2.0.0.dylib sense-voice-stream
           install_name_tool -change $SDL2_LIB @executable_path/libSDL2-2.0.0.dylib sense-voice-main || true
           
-          # 使用绝对路径拷贝
           cp sense-voice-main sense-voice-stream $WORKSPACE/release_pkg/
           cp $SDL2_LIB $WORKSPACE/release_pkg/
           
@@ -98,6 +96,49 @@ jobs:
         with:
           name: sensevoice-macos-arm64
           path: sensevoice-macos-arm64.zip
+
+  # ================= macOS 构建 (x64 / Intel) =================
+  build-macos-x64:
+    runs-on: macos-13 # 使用 macos-13 作为 Intel 芯片的构建环境
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: brew install cmake sdl2
+      - name: Build
+        run: |
+          git submodule sync && git submodule update --init --recursive
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF -DBUILD_SHARED_LIBS=OFF
+          cmake --build build -j $(sysctl -n hw.ncpu)
+          
+      - name: Smoke Test
+        run: |
+          cd build/bin
+          test -f sense-voice-stream || { echo "Error: stream missing!"; exit 1; }
+          chmod +x sense-voice-stream sense-voice-main
+          ./sense-voice-stream --help || true
+          
+      - name: Package
+        run: |
+          export WORKSPACE=${{ github.workspace }}
+          mkdir -p $WORKSPACE/release_pkg
+          SDL2_LIB=$(brew --prefix sdl2)/lib/libSDL2-2.0.0.dylib
+          
+          cd $WORKSPACE/build/bin
+          install_name_tool -change $SDL2_LIB @executable_path/libSDL2-2.0.0.dylib sense-voice-stream
+          install_name_tool -change $SDL2_LIB @executable_path/libSDL2-2.0.0.dylib sense-voice-main || true
+          
+          cp sense-voice-main sense-voice-stream $WORKSPACE/release_pkg/
+          cp $SDL2_LIB $WORKSPACE/release_pkg/
+          
+          cd $WORKSPACE/release_pkg
+          install_name_tool -id @executable_path/libSDL2-2.0.0.dylib libSDL2-2.0.0.dylib
+          zip -r $WORKSPACE/sensevoice-macos-x64.zip *
+          
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sensevoice-macos-x64
+          path: sensevoice-macos-x64.zip
 
   # ================= Windows 构建 (x64) =================
   build-windows:
@@ -137,7 +178,6 @@ jobs:
           export WORKSPACE=$(cygpath -u "${{ github.workspace }}")
           mkdir -p $WORKSPACE/release_pkg
           
-          # 使用绝对路径拷贝
           cp $WORKSPACE/build/bin/sense-voice-main.exe $WORKSPACE/release_pkg/
           cp $WORKSPACE/build/bin/sense-voice-stream.exe $WORKSPACE/release_pkg/
           
@@ -159,7 +199,8 @@ jobs:
   # ================= 发布 Release =================
   release:
     runs-on: ubuntu-latest
-    needs: [build-linux, build-macos, build-windows]
+    # 关键：必须等待 4 个构建任务全部完成
+    needs: [build-linux, build-macos-arm64, build-macos-x64, build-windows]
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - name: Download all artifacts
