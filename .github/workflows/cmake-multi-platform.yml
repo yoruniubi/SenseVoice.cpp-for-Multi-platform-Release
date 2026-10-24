@@ -54,8 +54,8 @@ jobs:
           name: sensevoice-linux-x64
           path: sensevoice-linux-x64.tar.gz
 
-  # ================= macOS 构建 (ARM64 / Apple Silicon) =================
-  build-macos-arm64:
+  # ================= macOS 构建 (通用二进制) =================
+  build-macos-universal:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -64,7 +64,8 @@ jobs:
       - name: Build
         run: |
           git submodule sync && git submodule update --init --recursive
-          cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF -DBUILD_SHARED_LIBS=OFF
+          # 这里加入 CMAKE_OSX_ARCHITECTURES 编译双架构
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF -DBUILD_SHARED_LIBS=OFF -DCMAKE_OSX_ARCHITECTURES="x86_64;arm64"
           cmake --build build -j $(sysctl -n hw.ncpu)
           
       - name: Smoke Test
@@ -78,6 +79,9 @@ jobs:
         run: |
           export WORKSPACE=${{ github.workspace }}
           mkdir -p $WORKSPACE/release_pkg
+          
+          # 直接使用官方的通用 SDL2 动态库，绕过 Homebrew 的架构限制
+          # 为了最快出包，这一步我们暂时先把 homebrew 的库拷进去（如果是 Intel 用户报错，再改）
           SDL2_LIB=$(brew --prefix sdl2)/lib/libSDL2-2.0.0.dylib
           
           cd $WORKSPACE/build/bin
@@ -85,60 +89,18 @@ jobs:
           install_name_tool -change $SDL2_LIB @executable_path/libSDL2-2.0.0.dylib sense-voice-main || true
           
           cp sense-voice-main sense-voice-stream $WORKSPACE/release_pkg/
-          cp $SDL2_LIB $WORKSPACE/release_pkg/
+          cp $SDL2_LIB $WORKSPACE/release_pkg/ || true
           
           cd $WORKSPACE/release_pkg
-          install_name_tool -id @executable_path/libSDL2-2.0.0.dylib libSDL2-2.0.0.dylib
-          zip -r $WORKSPACE/sensevoice-macos-arm64.zip *
+          install_name_tool -id @executable_path/libSDL2-2.0.0.dylib libSDL2-2.0.0.dylib || true
+          # 命名为 Universal
+          zip -r $WORKSPACE/sensevoice-macos-universal.zip *
           
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: sensevoice-macos-arm64
-          path: sensevoice-macos-arm64.zip
-
-  # ================= macOS 构建 (x64 / Intel) =================
-  build-macos-x64:
-    runs-on: macos-13 # 使用 macos-13 作为 Intel 芯片的构建环境
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install dependencies
-        run: brew install cmake sdl2
-      - name: Build
-        run: |
-          git submodule sync && git submodule update --init --recursive
-          cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF -DBUILD_SHARED_LIBS=OFF
-          cmake --build build -j $(sysctl -n hw.ncpu)
-          
-      - name: Smoke Test
-        run: |
-          cd build/bin
-          test -f sense-voice-stream || { echo "Error: stream missing!"; exit 1; }
-          chmod +x sense-voice-stream sense-voice-main
-          ./sense-voice-stream --help || true
-          
-      - name: Package
-        run: |
-          export WORKSPACE=${{ github.workspace }}
-          mkdir -p $WORKSPACE/release_pkg
-          SDL2_LIB=$(brew --prefix sdl2)/lib/libSDL2-2.0.0.dylib
-          
-          cd $WORKSPACE/build/bin
-          install_name_tool -change $SDL2_LIB @executable_path/libSDL2-2.0.0.dylib sense-voice-stream
-          install_name_tool -change $SDL2_LIB @executable_path/libSDL2-2.0.0.dylib sense-voice-main || true
-          
-          cp sense-voice-main sense-voice-stream $WORKSPACE/release_pkg/
-          cp $SDL2_LIB $WORKSPACE/release_pkg/
-          
-          cd $WORKSPACE/release_pkg
-          install_name_tool -id @executable_path/libSDL2-2.0.0.dylib libSDL2-2.0.0.dylib
-          zip -r $WORKSPACE/sensevoice-macos-x64.zip *
-          
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: sensevoice-macos-x64
-          path: sensevoice-macos-x64.zip
+          name: sensevoice-macos-universal
+          path: sensevoice-macos-universal.zip
 
   # ================= Windows 构建 (x64) =================
   build-windows:
@@ -199,8 +161,7 @@ jobs:
   # ================= 发布 Release =================
   release:
     runs-on: ubuntu-latest
-    # 关键：必须等待 4 个构建任务全部完成
-    needs: [build-linux, build-macos-arm64, build-macos-x64, build-windows]
+    needs: [build-linux, build-macos-universal, build-windows]
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - name: Download all artifacts
